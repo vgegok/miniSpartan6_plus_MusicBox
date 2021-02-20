@@ -1,0 +1,255 @@
+`timescale 1 ns / 1 ps
+`default_nettype none
+
+module Scarab_Top
+(
+  // --------------------------------------------------------------------------------
+  // Clocks
+  input wire          CLK50,  // 50 MHz oscillator
+  input wire          CLK32,  // 32 MHz oscillator
+  // --------------------------------------------------------------------------------
+  // LEDs 8 in a row, LEDS[7] is closest to USB connector
+  output wire   [7:0] LEDS,
+  // --------------------------------------------------------------------------------
+  // Flash SPI interface
+  output wire         FLASH_CS,
+  output wire         FLASH_CCLK,
+  inout wire          FLASH_MOSI,   // inout allows dual-SPI if supported by device
+  input wire          FLASH_MISO,
+  // --------------------------------------------------------------------------------
+  // ADC (in and out defined at the ADC chip) SPI interface
+  output wire         AD_CS,
+  output wire         AD_SCLK,
+  output wire         AD_DIN,
+  input wire          AD_DOUT,
+  // --------------------------------------------------------------------------------
+  // DIP Switches ON = '0', OFF = '1' using PULLUP in the UCF file (no on-board pullup)
+  input wire    [7:0] SW,
+  // --------------------------------------------------------------------------------
+  // micro SD Card (no idea how this works so I just make it all inouts)
+  inout wire          SD_CLK,
+  inout wire          SD_DAT0,
+  inout wire          SD_DAT1,
+  inout wire          SD_DAT2,
+  inout wire          SD_CD_DAT3,
+  inout wire          SD_CMD,
+  // --------------------------------------------------------------------------------
+  // SDRAM is single-data-rate and cannot use the MCB or MIG
+  output wire         UDQM,
+  output wire         SDRAM_CLK,
+  output wire         CKE,
+  output wire         BS1,
+  output wire         BS0,
+  output wire         SDRAM_CSn,
+  output wire         RASn,
+  output wire         CASn,
+  output wire         WEn,
+  output wire         LDQM,
+  output wire  [12:0] A,
+  inout wire   [15:0] D,
+  // --------------------------------------------------------------------------------
+  // Audio Pins to the jack.  Not clear which is left or right...
+  output wire         AUDIO1,
+  output wire         AUDIO2,
+  // --------------------------------------------------------------------------------
+  // HDMI In (J2)
+  input wire    [2:0] TMDS_in_P,
+  input wire    [2:0] TMDS_in_N,
+  input wire          TMDS_in_CLK_P,
+  input wire          TMDS_in_CLK_N,
+  // --------------------------------------------------------------------------------
+  // HDMI Out (J3)
+  output wire   [2:0] TMDS_out_P,
+  output wire   [2:0] TMDS_out_N,
+  output wire         TMDS_out_CLK_P,
+  output wire         TMDS_out_CLK_N,
+  // --------------------------------------------------------------------------------
+  // FTDI chip (no idea how this works so I just make it all inouts)
+  inout wire          FTDI_RXF,
+  inout wire          FTDI_TXE,
+  inout wire          FTDI_SIWUA,
+  inout wire          FTDI_WR,
+  inout wire          FTDI_RD,
+  inout wire    [7:0] FTDI_D,
+  // --------------------------------------------------------------------------------
+  // Port A I/O Pins
+  inout wire   [11:0] PORTA,
+  // --------------------------------------------------------------------------------
+  // Port B I/O Pins
+  inout wire   [11:0] PORTB,
+  // --------------------------------------------------------------------------------
+  // Port C I/O Pins
+  inout wire   [11:0] PORTC,
+  // --------------------------------------------------------------------------------
+  // Port D I/O Pins
+  inout wire    [3:0] PORTD,
+  // --------------------------------------------------------------------------------
+  // Port E I/O Pins
+  inout wire   [11:0] PORTE,
+  // --------------------------------------------------------------------------------
+  // Port F I/O Pins
+  inout wire   [11:0] PORTF
+);
+
+// Tie off SPI lines for now:
+assign FLASH_CCLK = 1'b0;
+assign FLASH_CS = 1'b1;
+
+assign AD_SCLK = 1'b0;
+assign AD_CS = 1'b1;
+assign AD_DIN = 1'b0;
+
+// Tie off SDRAM for now:
+assign UDQM = 0;
+assign SDRAM_CLK = 0;
+assign CKE = 0;
+assign BS1 = 0;
+assign BS0 = 0;
+assign SDRAM_CSn = 0;
+assign RASn = 0;
+assign CASn = 0;
+assign WEn = 0;
+assign LDQM = 0;
+assign A = 0;
+
+
+// Route-through the TMDS to allow build:
+
+wire  [2:0] TMDS_thru;
+wire        TMDS_thru_CLK;
+
+IBUFDS tmds_ibuf [2:0] (.I (TMDS_in_P), .IB (TMDS_in_N), .O (TMDS_thru));
+IBUFDS tmds_clk_ibuf (.I (TMDS_in_CLK_P), .IB (TMDS_in_CLK_N), .O (TMDS_thru_CLK));
+
+OBUFDS tmds_obuf [2:0] (.O (TMDS_out_P), .OB (TMDS_out_N), .I (TMDS_thru));
+OBUFDS tmds_clk_obuf (.O (TMDS_out_CLK_P), .OB (TMDS_out_CLK_N), .I (TMDS_thru_CLK));
+
+wire        clk32;
+wire        loc_clk_ibuf;
+
+reg   [3:0] rst_pipe = 4'b1111;
+reg         reset = 1;
+
+// 100 MHz from the clock wizard (after BUFG).
+wire        sys_clk;      // 100 MHz clock
+wire        clock_valid;  // DCM locked and input running
+reg         res_dcm = 1;
+reg  [15:0] lock_ctr = 0;
+
+clk50_wiz ck_wiz
+(
+  .CLK_IN1    (CLK50),
+  .CLK_OUT1   (sys_clk),
+  .RESET      (res_dcm),
+  .CLK_VALID  (clock_valid)
+);
+
+//-------------------------------------------
+// 32 MHz clock
+BUFG clk32_bufg (.I (CLK32), .O (clk32));
+
+// DCM reset when clock has been unlocked for too long (about 2 milliseconds)
+// Reset pulse ends when counter wraps, total assertion time 500 ns.  DCM
+// must re-lock within 2 ms to prevent another reset.  Note that the data
+// sheet max lock time is 5 ms for input frequency < 50 MHz, and 0.6 ms for
+// input frequency > 50 MHz.  Our input frequency is 50 MHz...
+always @ (posedge clk32) // Use free-running 32 MHz for reset counter
+  begin
+    if (clock_valid)
+      begin
+        lock_ctr <= 16'b0;
+      end
+    else
+      begin
+        lock_ctr <= lock_ctr + 1;
+      end
+    res_dcm <= lock_ctr >= 16'hfff0;
+  end
+
+// Use 32 MHz clock for startup reset since it doesn't go
+// through any DCM or PLL
+always @ (posedge clk32)
+  {reset,rst_pipe} <= {rst_pipe,1'b0};
+
+wire next_val;
+reg tick = 0;
+reg  [12:0] tick_timer = 0;
+wire  [6:0] note1;
+wire  [6:0] note2;
+reg   [6:0] noteA = 0;
+reg   [6:0] noteB = 0;
+reg         restA = 0;
+reg         restB = 0;
+reg   [9:0] ROM_addr = 0;
+
+// TEMPO is the rate of a note in the time signature, usually quarter note.
+// BEATS_PER_TEMPO is a multiplier to get the smallest time unit for addressing
+// the music ROM.  In this case the music is in 6/8 time and TEMPO is 260
+// 8th notes per minute.  The ROM uses 16th note resolution
+parameter TEMPO = 260; // 8th notes per minute
+parameter BEATS_PER_TEMPO = 2;  // ROM resolution in entries per 8th note
+// Actual music ROM will be a binary size, in this instance 512 entries.
+// However ROM_LEN determines how much of this is actually programmed with
+// music.
+parameter ROM_LEN = 432;  // 36 measures includes two silent measures between plays
+
+localparam BEAT = 48000 * 60 / (TEMPO * BEATS_PER_TEMPO);
+
+initial $display ("BEAT is %d ticks", BEAT);
+
+music_ROM Bach
+(
+  .addr_in  (ROM_addr),
+  .sys_clk  (sys_clk),
+  .note1    (note1),
+  .note2    (note2)
+);
+
+always @ (posedge sys_clk)
+if (next_val) // Next value, runs at 48 KHz
+  begin
+    tick <= tick_timer == (BEAT - 2);
+    if (tick)    // about 6 times per second for WIDTH = 24
+      begin
+        tick_timer <= 0;
+        if (note1 != 1) // Not continuation of previous tone
+          restA <= 1;
+        if (note2 != 1) // Not continuation of previous tone
+          restB <= 1;
+      end
+    else
+      begin
+        tick_timer <= tick_timer + 1;
+        if (tick_timer == 960)
+          begin
+            if (note1 != 1) // Not continuation of previous tone
+              noteA <= note1;
+            if (note2 != 1) // Not continuation of previous tone
+              noteB <= note2;
+            restA <= note1 == 0;
+            restB <= note2 == 0;
+            if (ROM_addr == (ROM_LEN - 1)) ROM_addr <= 0;
+            else ROM_addr <= ROM_addr + 1;
+          end
+      end
+  end
+
+tone_gen_dual audio
+(
+  .noteA      (noteA),       // 24 - 111 = piano range
+  .restA      (restA),
+  .noteB      (noteB),       // 24 - 111 = piano range
+  .restB      (restB),
+  .sys_clk    (sys_clk),
+  .sys_rst    (reset),
+  .pwm_out_A  (AUDIO1),       // JP5 ring
+  .pwm_out_B  (AUDIO2),       // JP5 tip
+  .next_val   (next_val)
+);
+
+assign LEDS[6:0] = noteA;
+assign LEDS[7] = restA;
+
+endmodule
+
+`default_nettype wire

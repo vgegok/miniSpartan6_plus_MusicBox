@@ -1,0 +1,87 @@
+`timescale 1ns / 1ps
+`default_nettype none
+
+module music_ROM
+(
+  input wire  [9:0] addr_in,    // Music address, location within tune in beats
+  input wire        sys_clk,    // 100 MHz
+  output reg  [6:0] note1,      // First of two concurrently played notes
+  output reg  [6:0] note2       // Second of two concurrently played notes
+);
+
+reg  [15:0] music_lut [0:127];
+integer i;
+initial $readmemh ("../source/Bach.hex", music_lut);
+
+reg  [23:0] accumA = 0;     // DDS accumulator A
+reg  [23:0] accumB = 0;     // DDS accumulator B
+reg  [23:0] tone_valA = 0;  // DDS phase adder A
+reg  [23:0] tone_valB = 0;  // DDS phase adder B
+reg  [11:0] dds1_iaddr = 0;
+reg  [11:0] dds2_iaddr = 0;
+wire [11:0] dds1_odata;
+wire [11:0] dds2_odata;
+reg [23:22] prev_accumA = 0;
+reg [23:22] prev_accumB = 0;
+reg         stopA = 0;
+reg         stopB = 0;
+
+always @ (posedge sys_clk)
+begin
+  if (next_val)
+    begin
+      tone_valA <= music_lut[noteA];
+      tone_valB <= music_lut[noteB];
+      if (!stopA) accumA <= accumA + tone_valA;
+      else accumA <= 0;
+      if (!stopB) accumB <= accumB + tone_valB;
+      else accumB <= 0;
+      dds1_iaddr <= accumA[23:12];
+      dds2_iaddr <= accumB[23:12];
+    end
+  prev_accumA <= accumA[23:22];
+  if (restA & !accumA[23] & prev_accumA[23])
+    stopA <= 1;
+  else if (!restA)
+    stopA <= 0;
+  prev_accumB <= accumB[23:22];
+  if (restB & !accumB[23] & prev_accumB[23])
+    stopB <= 1;
+  else if (!restB)
+    stopB <= 0;
+end
+
+// Sine function LUT using 12-bit offset binary
+sinelut sine_inst
+(
+  .sys_rst    (sys_rst),
+  .sys_clk    (sys_clk),
+  .dds1_iaddr (dds1_iaddr),
+  .dds2_iaddr (dds2_iaddr),
+  .clk_ena    (next_val),
+  .dds1_odata (dds1_odata),
+  .dds2_odata (dds2_odata)
+);
+
+// Pulse-width modulation updates at 48 KHz
+pwm_out_ddr pwm_A_inst
+(
+  .data_in    (dds1_odata),
+  .sys_clk    (sys_clk),
+  .sys_rst    (sys_rst),
+  .pwm_out_p  (pwm_out_A),
+  .next_val   (next_val)
+);
+
+pwm_out_ddr pwm_B_inst
+(
+  .data_in    (dds2_odata),
+  .sys_clk    (sys_clk),
+  .sys_rst    (sys_rst),
+  .pwm_out_p  (pwm_out_B),
+  .next_val   ()
+);
+
+endmodule
+`default_nettype wire
+
