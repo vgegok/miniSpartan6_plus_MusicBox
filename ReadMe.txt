@@ -1,4 +1,4 @@
-Thanks for the code provided by [gszakacs](https://forums.xilinx.com/t5/Xilinx-Evaluation-Boards/Scarab-Hardware-s-miniSpartan6-Audio-example/m-p/588595/highlight/true) , I have verified it in minispartan6+(xc6slx9).
+Thanks for the code provided by [gszakacs](https://forums.xilinx.com/t5/Xilinx-Evaluation-Boards/Scarab-Hardware-s-miniSpartan6-Audio-example/m-p/588595/highlight/true#M11847) , I have verified it in minispartan6+(xc6slx9).
 
 ISE 14.7 Project:
 
