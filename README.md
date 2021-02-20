@@ -68,7 +68,7 @@ than sine_lut.hex.  Remove this option to get sine wave output.
 
 # Programming:
 
-You can use my [Qt Tool](https://github.com/vgegok/miniSProg) to Programe!
+You can use [this Tool](https://github.com/vgegok/miniSProg) to Programe!
 
 You will need the following in order to load the program into the
 Scarab MiniSpartan6+ board using the supplied batch files:
